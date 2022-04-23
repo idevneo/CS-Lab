@@ -17,6 +17,7 @@
 #include <errno.h>
 #include "cache.h"
 
+
 #define ADDRESS_LENGTH 64
 
 /* Counters used to record cache statistics in printSummary().
@@ -35,7 +36,9 @@ int dirty_eviction_count = 0;
 int clean_eviction_count = 0;
 
 /* TODO: add more globals, structs, macros if necessary */
+#define GETBF(src, frompos, width) (((src) & (((1 << (width)) - 1) << (frompos))) >> (frompos))
 
+int lru_counter = 0;
 /*
  * Initialize the cache according to specified arguments
  * Called by cache-runner so do not modify the function signature
@@ -125,7 +128,17 @@ void free_cache(cache_t *cache)
  */
 cache_line_t *get_line(cache_t *cache, uword_t addr)
 {
-    /* your implementation */
+    unsigned int set_index = GETBF(addr, cache->b, cache->s);
+    unsigned int tag = GETBF(addr, cache->b + cache->s, ADDRESS_LENGTH - cache->b - cache->s);
+
+    //loop through lines in a set
+    for (unsigned int i = 0; i < cache->E; i++){
+
+        //return line if tag match and valid
+        if (cache->sets[set_index].lines[i].tag == tag && cache->sets[set_index].lines[i].valid == 1){
+            return &(cache->sets[set_index].lines[i]);
+        }
+    }
     return NULL;
 }
 
@@ -136,29 +149,88 @@ cache_line_t *get_line(cache_t *cache, uword_t addr)
 cache_line_t *select_line(cache_t *cache, uword_t addr)
 {
     /* your implementation */
-    return NULL;
+    unsigned int set_index = GETBF(addr, cache->b, cache->s);
+    lru_counter = 0;
+    int64_t lowest_LRU = INT64_MAX;
+
+    for (unsigned int i = 0; i < cache->E; i++){
+        //invalid
+        if (cache->sets[set_index].lines[i].valid == 0){
+            return &(cache->sets[set_index].lines[i]);
+        }
+        //pick the lowest LRU
+        else if (cache->sets[set_index].lines[i].lru < lowest_LRU){
+            lowest_LRU = cache->sets[set_index].lines[i].lru;
+            lru_counter = i;
+        }
+    }
+    return &(cache->sets[set_index].lines[lru_counter]);
 }
 
 /* TODO:
  * Check if the address is hit in the cache, updating hit and miss data.
  * Return true if pos hits in the cache.
  */
-bool check_hit(cache_t *cache, uword_t addr, operation_t operation)
-{
-    /* your implementation */
-    return false;
+bool check_hit(cache_t *cache, uword_t addr, operation_t operation){
+    if (get_line(cache, addr) != NULL){
+        cache_line_t *line = get_line(cache, addr);
+        line->lru = hit_count + miss_count;
+        if(operation == WRITE){
+            line->dirty = 1;
+        }
+        hit_count += 1;
+        return true;
+    } else {
+        miss_count += 1;
+        return false;
+    }
 }
 
 /* TODO:
  * Handles Misses, evicting from the cache if necessary.
  * Fill out the evicted_line_t struct with info regarding the evicted line.
  */
-evicted_line_t *handle_miss(cache_t *cache, uword_t addr, operation_t operation, byte_t *incoming_data)
-{
+evicted_line_t *handle_miss(cache_t *cache, uword_t addr, operation_t operation, byte_t *incoming_data){
     size_t B = (size_t)pow(2, cache->b);
     evicted_line_t *evicted_line = malloc(sizeof(evicted_line_t));
     evicted_line->data = (byte_t *) calloc(B, sizeof(byte_t));
-    /* your implementation */
+
+    int tag = GETBF(addr, cache->b + cache->s, ADDRESS_LENGTH - cache->b - cache->s);
+    cache_line_t *line_to_replace = select_line(cache, addr);
+
+    //setting evicted line content
+    evicted_line->valid = line_to_replace->valid;
+    evicted_line->dirty = line_to_replace->dirty;
+    evicted_line->addr = addr;
+    evicted_line->data = line_to_replace->data;
+
+    if (line_to_replace->valid == 1){
+        //valid clean
+        if (line_to_replace->dirty == 0){
+            clean_eviction_count += 1;
+            line_to_replace->valid = 1;
+            line_to_replace->tag = tag;
+            line_to_replace->lru = hit_count + miss_count;
+            line_to_replace->data = incoming_data;
+            line_to_replace->dirty = (operation == READ) ? 0 : 1;
+
+        //valid dirty
+        } else {
+            dirty_eviction_count += 1;
+            line_to_replace->valid = 1;
+            line_to_replace->tag = tag;
+            line_to_replace->lru = hit_count + miss_count;
+            line_to_replace->data = incoming_data;
+            line_to_replace->dirty = (operation == READ) ? 0 : 1;
+        }
+    } else {
+        //invalid
+        line_to_replace->valid = 1;
+        line_to_replace->tag = tag;
+        line_to_replace->lru = hit_count + miss_count;
+        line_to_replace->data = incoming_data;
+        line_to_replace->dirty = (operation == READ) ? 0 : 1;
+    }
     return evicted_line;
 }
 
@@ -169,8 +241,10 @@ evicted_line_t *handle_miss(cache_t *cache, uword_t addr, operation_t operation,
 void get_byte_cache(cache_t *cache, uword_t addr, byte_t *dest)
 {
     /* your implementation */
-}
+    // int blockOffset = GETBF(addr, 0, cache->b);
 
+    // dest = get_line(cache, addr)->data[blockOffset];
+}
 
 /* TODO:
  * Get 8 bytes from the cache and write it to dest.
@@ -179,6 +253,7 @@ void get_byte_cache(cache_t *cache, uword_t addr, byte_t *dest)
 void get_word_cache(cache_t *cache, uword_t addr, word_t *dest) {
 
     /* your implementation */
+    // dest = get_line(cache, addr)->data;
 }
 
 
